@@ -1,0 +1,20 @@
+name: CI
+
+on: [push, pull_request]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: 18
+    - name: Install dependencies
+      run: npm install
+    - name: Install root dev deps
+      run: npm install --no-save hardhat @nomiclabs/hardhat-ethers ethers @openzeppelin/contracts
+    - name: Run Hardhat tests
+      run: npx hardhat test --no-compile
