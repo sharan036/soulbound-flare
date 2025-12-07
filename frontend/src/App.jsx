@@ -8,36 +8,11 @@ import NeonDropdown from "./NeonDropdown";
 import GuideTour from "./components/GuideTour";
 
 const TOUR_STEPS = [
-  {
-    id: "network",
-    title: "Choose Network",
-    text: "Switch between Local, Flare, and Mainnet. Contracts + relayer change automatically.",
-    target: ".network-dropdown"
-  },
-  {
-    id: "connect",
-    title: "Connect Wallet",
-    text: "Click here to connect your MetaMask wallet.",
-    target: ".btn-connect-wallet"
-  },
-  {
-    id: "sbt",
-    title: "Mint SoulBound Token",
-    text: "Mint your identity-bound SBT that allows score and borrowing.",
-    target: ".btn-mint-sbt"
-  },
-  {
-    id: "score",
-    title: "Trigger Score",
-    text: "Generate a mock AI score and store it on backend or chain.",
-    target: ".btn-trigger-score"
-  },
-  {
-    id: "borrow",
-    title: "Borrow or Repay",
-    text: "Deposit collateral → Borrow mUSD → Repay using gasless relayer.",
-    target: ".form-row"
-  }
+  { id: "network", title: "Choose Network", text: "Switch between Local, Flare, and Mainnet. Contracts + relayer change automatically.", target: ".network-dropdown" },
+  { id: "connect", title: "Connect Wallet", text: "Click here to connect your MetaMask wallet.", target: ".btn-connect-wallet" },
+  { id: "sbt", title: "Mint SoulBound Token", text: "Mint your identity-bound SBT that allows score and borrowing.", target: ".btn-mint-sbt" },
+  { id: "score", title: "Trigger Score", text: "Generate a mock AI score and store it on backend or chain.", target: ".btn-trigger-score" },
+  { id: "borrow", title: "Borrow or Repay", text: "Deposit collateral → Borrow mUSD → Repay using gasless relayer.", target: ".form-row" }
 ];
 
 const NETWORKS = {
@@ -45,8 +20,10 @@ const NETWORKS = {
     key: "local",
     label: "Local Testnet",
     chainId: 31337,
+    chainIdHex: "0x7A69",
     rpcUrl: import.meta.env.VITE_RPC_LOCAL || "http://localhost:8545",
     relayerUrl: import.meta.env.VITE_RELAYER_LOCAL || "http://localhost:3001",
+    nativeCurrency: { name: "ETH", symbol: "ETH", decimals: 18 },
     contracts: {
       lendingPool: import.meta.env.VITE_LENDING_POOL_LOCAL || import.meta.env.VITE_LENDING_POOL || "",
       soulbound: import.meta.env.VITE_SOULBOUND_LOCAL || import.meta.env.VITE_SOULBOUND || "",
@@ -60,8 +37,10 @@ const NETWORKS = {
     key: "flare",
     label: "Flare",
     chainId: Number(import.meta.env.VITE_CHAINID_FLARE || 14),
+    chainIdHex: import.meta.env.VITE_CHAINID_FLARE_HEX || "0x0E", // 14 hex
     rpcUrl: import.meta.env.VITE_RPC_FLARE || "https://flare-api.flare.network/ext/bc/C/rpc",
     relayerUrl: import.meta.env.VITE_RELAYER_FLARE || "",
+    nativeCurrency: { name: "FLR", symbol: "FLR", decimals: 18 },
     contracts: {
       lendingPool: import.meta.env.VITE_LENDING_POOL_FLARE || "",
       soulbound: import.meta.env.VITE_SOULBOUND_FLARE || "",
@@ -75,8 +54,10 @@ const NETWORKS = {
     key: "mainnet",
     label: "Mainnet",
     chainId: Number(import.meta.env.VITE_CHAINID_MAINNET || 1),
+    chainIdHex: import.meta.env.VITE_CHAINID_MAINNET_HEX || "0x1",
     rpcUrl: import.meta.env.VITE_RPC_MAINNET || "",
     relayerUrl: import.meta.env.VITE_RELAYER_MAINNET || "",
+    nativeCurrency: { name: "Ether", symbol: "ETH", decimals: 18 },
     contracts: {
       lendingPool: import.meta.env.VITE_LENDING_POOL_MAINNET || "",
       soulbound: import.meta.env.VITE_SOULBOUND_MAINNET || "",
@@ -91,7 +72,8 @@ export default function App() {
   const [provider, setProvider] = useState(null);
   const [signer, setSigner] = useState(null);
   const [address, setAddress] = useState("");
-  const [tourOpen, setTourOpen] = useState(() => !localStorage.getItem("tour_done"));
+  const [connectedChainId, setConnectedChainId] = useState(null);
+
   const [score, setScore] = useState(null);
   const [history, setHistory] = useState([]);
   const [status, setStatus] = useState("");
@@ -99,14 +81,14 @@ export default function App() {
   const [amount, setAmount] = useState("0.1");
   const [balance, setBalance] = useState("0.0");
   const [borrowLimit, setBorrowLimit] = useState(null);
-
   const [loading, setLoading] = useState(false);
-
-  // NETWORK SWITCH (Neon Pill)
-  const [activeNetKey, setActiveNetKey] = useState("local");
+  const [tourOpen, setTourOpen] = useState(() => !localStorage.getItem("tour_done"));
+  const [activeNetKey, setActiveNetKey] = useState(() => {
+    return localStorage.getItem("active_net") || "local";
+  });
   const activeNet = useMemo(() => NETWORKS[activeNetKey], [activeNetKey]);
 
-  // Toast system
+  /** TOASTS */
   const [toasts, setToasts] = useState([]);
   const pushToast = useCallback((msg, type = "success", ttl = 4200) => {
     const id = Math.random().toString(36).slice(2, 9);
@@ -114,62 +96,159 @@ export default function App() {
     if (ttl > 0) setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), ttl);
   }, []);
 
-  // Helper: build dynamic contracts map
-  const CONTRACTS = useMemo(() => {
-    return {
-      lendingPool: activeNet.contracts.lendingPool || "",
-      soulbound: activeNet.contracts.soulbound || "",
-      scoreOracle: activeNet.contracts.scoreOracle || "",
-      collateral: activeNet.contracts.collateral || "",
-      stable: activeNet.contracts.stable || ""
-    };
-  }, [activeNet]);
+  /** DERIVED CONTRACTS (dynamic by network) */
+  const CONTRACTS = useMemo(() => ({
+    lendingPool: activeNet.contracts.lendingPool || "",
+    soulbound: activeNet.contracts.soulbound || "",
+    scoreOracle: activeNet.contracts.scoreOracle || "",
+    collateral: activeNet.contracts.collateral || "",
+    stable: activeNet.contracts.stable || ""
+  }), [activeNet]);
 
-  // --- Connect Wallet (MetaMask) ---
+  /** UTILS: write network selection to localStorage */
+  useEffect(() => {
+    localStorage.setItem("active_net", activeNetKey);
+  }, [activeNetKey]);
+
+  /** PROVIDER & METAMASK HANDLERS */
   async function connect() {
     if (!window.ethereum) {
-      pushToast("Install MetaMask", "error");
+      pushToast("MetaMask not found — install it", "error");
       return;
     }
     try {
       await window.ethereum.request({ method: "eth_requestAccounts" });
       const p = new ethers.providers.Web3Provider(window.ethereum, "any");
       const s = p.getSigner();
+
       setProvider(p);
       setSigner(s);
+
       const addr = await s.getAddress();
       setAddress(addr);
 
-      // Optionally show detected chain
-      try {
-        const chain = await p.getNetwork();
-        if (chain?.chainId && chain.chainId !== activeNet.chainId) {
-          pushToast(`MetaMask on chain ${chain.chainId}. UI uses ${activeNet.label}`, "warning");
-        }
-      } catch {}
+      // get chain id
+      const net = await p.getNetwork();
+      setConnectedChainId(net.chainId);
 
-      pushToast("Wallet connected", "success");
+      // attach listeners once
+      attachEthereumListeners();
+
+      // warn if MetaMask chain differs from activeNet
+      if (net.chainId !== activeNet.chainId) {
+        pushToast(`MetaMask is on chain ${net.chainId}. UI set to ${activeNet.label}`, "warning", 6000);
+      } else {
+        pushToast("Wallet connected", "success");
+      }
     } catch (err) {
       console.error("connect err", err);
       pushToast("Wallet connection failed", "error");
     }
   }
 
-  // --- Fetch balance using Web3Provider (MetaMask) ---
+  // Attach metamask events (change accounts / chain)
+  function attachEthereumListeners() {
+    if (!window.ethereum || window.ethereum._neon_listeners_attached) return;
+    window.ethereum.on("accountsChanged", (accounts) => {
+      if (!accounts || accounts.length === 0) {
+        setAddress("");
+        setSigner(null);
+        setProvider(null);
+        pushToast("Disconnected", "error");
+      } else {
+        setAddress(accounts[0]);
+        // provider remains same; refresh signer
+        const p = new ethers.providers.Web3Provider(window.ethereum, "any");
+        setProvider(p);
+        setSigner(p.getSigner());
+        pushToast("Account switched", "info");
+      }
+    });
+
+    window.ethereum.on("chainChanged", (chainIdHex) => {
+      const cid = Number(chainIdHex);
+      setConnectedChainId(cid);
+      // if chain changed and doesn't match selected network, warn
+      if (cid !== activeNet.chainId) {
+        pushToast(`Wallet switched to chain ${cid}. UI uses ${activeNet.label}`, "warning", 6000);
+      } else {
+        pushToast(`Wallet switched to ${activeNet.label}`, "success", 3000);
+      }
+    });
+
+    window.ethereum._neon_listeners_attached = true;
+  }
+
+  // Ensure MetaMask is on the activeNet; attempt to switch (and add chain if necessary)
+  async function ensureCorrectNetwork() {
+    if (!window.ethereum) throw new Error("No wallet detected");
+
+    const desiredChainId = activeNet.chainId;
+    // If provider is set we can check connectedChainId, else ask provider
+    try {
+      const hex = activeNet.chainIdHex || `0x${desiredChainId.toString(16)}`;
+      // request switch
+      await window.ethereum.request({
+        method: "wallet_switchEthereumChain",
+        params: [{ chainId: hex }]
+      });
+      // set provider state refresh after switch
+      if (provider) {
+        const net = await provider.getNetwork();
+        setConnectedChainId(net.chainId);
+      } else {
+        const p = new ethers.providers.Web3Provider(window.ethereum, "any");
+        setProvider(p);
+        setSigner(p.getSigner());
+        const net = await p.getNetwork();
+        setConnectedChainId(net.chainId);
+      }
+      return true;
+    } catch (switchErr) {
+      // 4902 error = chain not added to wallet -> try to add
+      const errorCode = switchErr?.code;
+      if (errorCode === 4902 || (switchErr && /Unrecognized chain ID/i.test(String(switchErr.message || "")))) {
+        // attempt to add chain
+        try {
+          const chainParams = {
+            chainId: activeNet.chainIdHex || `0x${activeNet.chainId.toString(16)}`,
+            chainName: activeNet.label,
+            nativeCurrency: activeNet.nativeCurrency || { name: "ETH", symbol: "ETH", decimals: 18 },
+            rpcUrls: [activeNet.rpcUrl],
+            blockExplorerUrls: []
+          };
+          await window.ethereum.request({ method: "wallet_addEthereumChain", params: [chainParams] });
+          // after adding, switch again
+          await window.ethereum.request({ method: "wallet_switchEthereumChain", params: [{ chainId: chainParams.chainId }] });
+          pushToast(`Added and switched to ${activeNet.label}`, "success");
+          return true;
+        } catch (addErr) {
+          console.error("wallet_addEthereumChain failed", addErr);
+          pushToast("Wallet cannot add this chain automatically. Please add it manually in MetaMask.", "error");
+          throw addErr;
+        }
+      }
+      // user rejected or other — bubble up
+      console.error("ensureCorrectNetwork switch error", switchErr);
+      throw switchErr;
+    }
+  }
+
+  /** READS: balance, history, borrowLimit */
   async function fetchBalance() {
     if (!provider || !address) return;
     try {
       const bal = await provider.getBalance(address);
       setBalance(ethers.utils.formatEther(bal));
     } catch (err) {
-      console.error("balance err:", err);
+      console.error("balance err", err);
     }
   }
 
-  // --- Fetch history & borrow limit (use network rpc for reads) ---
   async function fetchHistoryAndLimit() {
     if (!address) return;
-    // history from backend relayer (network-specific relayerUrl)
+
+    // fetch history from relayer for active net
     try {
       const relayerUrl = activeNet.relayerUrl || "http://localhost:3001";
       const res = await fetch(`${relayerUrl.replace(/\/$/, "")}/score-history/${address}`);
@@ -177,14 +256,17 @@ export default function App() {
       setHistory(j.history || []);
       if (j.history?.length) setScore(j.history[j.history.length - 1].score);
     } catch (err) {
-      // ignore
       console.error("history fetch err", err);
     }
 
-    // borrow limit: use the activeNet.rpcUrl for provider
+    // borrow limit: read from the network rpc (non-signing)
     try {
       const rpc = activeNet.rpcUrl || "http://localhost:8545";
       const readProvider = new ethers.providers.JsonRpcProvider(rpc);
+      if (!CONTRACTS.lendingPool) {
+        setBorrowLimit(null);
+        return;
+      }
       const pool = new ethers.Contract(CONTRACTS.lendingPool, LendingPoolABI, readProvider);
       const limit = await pool.getBorrowLimit(address);
       setBorrowLimit(ethers.utils.formatUnits(limit, 18));
@@ -193,14 +275,7 @@ export default function App() {
     }
   }
 
-  useEffect(() => {
-    // when network switch occurs, refresh history/limit
-    if (address) {
-      fetchHistoryAndLimit();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeNetKey, address]);
-
+  // Run periodic refreshes when address or network changes
   useEffect(() => {
     let t;
     if (address) {
@@ -212,33 +287,68 @@ export default function App() {
       }, 6000);
     }
     return () => clearInterval(t);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [address]);
+    // disabled exhaustive deps to avoid loops
+    // eslint-disable-next-line
+  }, [address, activeNetKey]);
 
-  // --- Mint SBT ---
+  /** SAFE TRANSACTIONS / helper wrapper
+   * Use ensureCorrectNetwork() before any on-chain user action that opens MetaMask
+   */
+  async function safeTxWrapper(fn /* async function that performs action */) {
+    if (!window.ethereum) {
+      pushToast("MetaMask not found", "error");
+      throw new Error("no wallet");
+    }
+
+    try {
+      await ensureCorrectNetwork();
+    } catch (err) {
+      // user refused to switch or wallet cannot do it
+      pushToast("Please switch your wallet network to " + activeNet.label, "error");
+      throw err;
+    }
+
+    // Refresh provider & signer to reflect the (possibly) switched chain
+    const p = new ethers.providers.Web3Provider(window.ethereum, "any");
+    setProvider(p);
+    setSigner(p.getSigner());
+
+    try {
+      return await fn(p, p.getSigner());
+    } catch (err) {
+      console.error("safeTxWrapper action error", err);
+      throw err;
+    }
+  }
+
+  /** ACTIONS: mintSBT, triggerScore, deposit, borrow, repay, relayer calls */
+
   async function mintSBT() {
-    if (!signer) return pushToast("Connect wallet", "error");
+    if (!address) return pushToast("Connect wallet", "error");
     try {
       setLoading(true);
-      if (!CONTRACTS.soulbound) throw new Error("SoulBound contract address not set for network");
-      const sbt = new ethers.Contract(CONTRACTS.soulbound, SoulBoundABI, signer);
-      const tx = await sbt.mint(address);
-      await tx.wait();
-      pushToast("SBT minted", "success");
-      fetchHistoryAndLimit();
+      await safeTxWrapper(async (p, s) => {
+        if (!CONTRACTS.soulbound) throw new Error("SoulBound contract address not set for this network.");
+        const sbt = new ethers.Contract(CONTRACTS.soulbound, SoulBoundABI, s);
+        const tx = await sbt.mint(address);
+        await tx.wait();
+        pushToast("SBT minted", "success");
+        await fetchHistoryAndLimit();
+      });
     } catch (err) {
       console.error("mint err", err);
-      pushToast("Mint failed", "error");
+      if (err && err.code === 4001) pushToast("User rejected transaction", "error");
+      else pushToast("Mint failed: " + (err.message || "unknown"), "error");
     } finally {
       setLoading(false);
     }
   }
 
-  // --- Trigger score via relayer backend (mock AI) ---
   async function triggerScore() {
     if (!address) return pushToast("Connect wallet", "error");
     try {
       setLoading(true);
+      // no wallet action needed here, backend handles
       const relayerUrl = activeNet.relayerUrl || "http://localhost:3001";
       const res = await fetch(`${relayerUrl.replace(/\/$/, "")}/trigger-score`, {
         method: "POST",
@@ -252,122 +362,116 @@ export default function App() {
       fetchHistoryAndLimit();
     } catch (err) {
       console.error("trigger score err", err);
-      pushToast("Score trigger error", "error");
+      pushToast("Score trigger failed", "error");
     } finally {
       setLoading(false);
     }
   }
 
-  // --- Safe relayer sending using EIP-712 typed data ---
+  // EIP-712 relayer: show preview and sign typed data
   async function safeSendRelayedTx(to, data, value) {
-    if (!signer) return pushToast("Connect wallet first", "error");
+    if (!address) return pushToast("Connect wallet", "error");
 
     try {
-      const relayerUrl = activeNet.relayerUrl || "http://localhost:3001";
+      await safeTxWrapper(async (p, s) => {
+        // get relayer URL & nonce
+        const relayerUrl = activeNet.relayerUrl || "http://localhost:3001";
+        const nonceRes = await fetch(`${relayerUrl.replace(/\/$/, "")}/nonce/${address}`);
+        const nonceJson = await nonceRes.json();
+        const nonce = nonceJson.nonce || 0;
 
-      // get nonce from relayer backend
-      const nonceRes = await fetch(`${relayerUrl.replace(/\/$/, "")}/nonce/${address}`);
-      const nonceJson = await nonceRes.json();
-      const nonce = nonceJson.nonce || 0;
+        // Build typed data domain (use activeNet.chainId)
+        const domain = {
+          name: "MODRAN Relayer",
+          version: "1",
+          chainId: activeNet.chainId,
+          verifyingContract: to
+        };
 
-      // Domain: use activeNet.chainId for clarity (wallet will show chain)
-      const domain = {
-        name: "MODRAN Relayer",
-        version: "1",
-        chainId: activeNet.chainId,
-        verifyingContract: to
-      };
+        const types = {
+          RelayRequest: [
+            { name: "to", type: "address" },
+            { name: "data", type: "bytes" },
+            { name: "value", type: "uint256" },
+            { name: "user", type: "address" },
+            { name: "nonce", type: "uint256" }
+          ]
+        };
 
-      const types = {
-        RelayRequest: [
-          { name: "to", type: "address" },
-          { name: "data", type: "bytes" },
-          { name: "value", type: "uint256" },
-          { name: "user", type: "address" },
-          { name: "nonce", type: "uint256" }
-        ]
-      };
+        const request = { to, data, value: value || 0, user: address, nonce };
 
-      const request = { to, data, value: value || 0, user: address, nonce };
+        // human-friendly preview
+        let humanAction = data.slice(0, 80) + "...";
+        try {
+          const iface = new ethers.utils.Interface(LendingPoolABI);
+          const parsed = iface.parseTransaction({ data });
+          humanAction = `${parsed.name}(${Array.from(parsed.args).map(a => String(a)).join(", ")})`;
+        } catch (_) { /* ignore parsing error */ }
 
-      // Human preview
-      let humanAction = "unknown";
-      try {
-        const iface = new ethers.utils.Interface(LendingPoolABI);
-        const parsed = iface.parseTransaction({ data });
-        humanAction = `${parsed.name}(${Array.from(parsed.args).map(a => String(a)).join(", ")})`;
-      } catch { humanAction = data.slice(0, 80) + "..."; }
+        const preview = `Network: ${activeNet.label}\nAction: ${humanAction}\nContract: ${to}\nValue: ${value || 0}\nNonce: ${nonce}\n\nApprove to sign this relayer request?`;
+        if (!window.confirm(preview)) {
+          pushToast("User cancelled", "error");
+          return;
+        }
 
-      const preview = `Network: ${activeNet.label}\nAction: ${humanAction}\nContract: ${to}\nValue: ${value || 0}\nNonce: ${nonce}\n\nSign to confirm.`;
-      // Use confirm() for a simple prompt; replace with modal if desired
-      if (!window.confirm(preview)) {
-        pushToast("User cancelled", "error");
-        return;
-      }
+        pushToast("Signing relayer request...", "success", 1200);
+        const signature = await s._signTypedData(domain, types, request);
 
-      pushToast("Signing relayer request...", "success", 1200);
-
-      // sign typed data using wallet
-      const signature = await signer._signTypedData(domain, types, request);
-
-      // post to relayer
-      const res = await fetch(`${relayerUrl.replace(/\/$/, "")}/relayTyped`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ ...request, signature, domain })
+        // post to relayer
+        const res = await fetch(`${relayerUrl.replace(/\/$/, "")}/relayTyped`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ ...request, signature, domain })
+        });
+        const j = await res.json();
+        if (!j.ok) {
+          console.error("relay failed response", j);
+          pushToast("Relay failed: " + (j.error || j.detail || "unknown"), "error");
+          return;
+        }
+        pushToast("Relayed tx: " + j.txHash, "success");
+        setStatus("Last TX: " + j.txHash);
       });
-
-      const j = await res.json();
-      if (!j.ok) {
-        console.error("relay failed response", j);
-        pushToast("Relay failed: " + (j.error || j.detail || "unknown"), "error");
-        return;
-      }
-
-      pushToast("Relayed tx: " + j.txHash, "success");
-      setStatus("Last TX: " + j.txHash);
-      // refresh view
-      fetchHistoryAndLimit();
     } catch (err) {
       console.error("safeSendRelayedTx err", err);
       if (err && err.code === 4001) pushToast("User rejected signature", "error");
-      else pushToast("Relayer error", "error");
+      else pushToast("Relay error", "error");
       throw err;
     }
   }
 
-  // Collateral/Borrow/Repay flows use relayed EIP-712
+  /** Collateral / Borrow / Repay flows (use relayer) */
   async function depositCollateral() {
-    if (!signer) return pushToast("Connect wallet", "error");
+    if (!address) return pushToast("Connect wallet", "error");
     try {
       setLoading(true);
-      if (!CONTRACTS.collateral) throw new Error("Collateral contract not set for network");
+      await safeTxWrapper(async (p, s) => {
+        if (!CONTRACTS.collateral) throw new Error("Collateral not set for this network");
+        const token = new ethers.Contract(CONTRACTS.collateral, [
+          { inputs: [{ internalType: "address", name: "to", type: "address" }, { internalType: "uint256", name: "amount", type: "uint256" }], name: "mintTo", outputs: [], stateMutability: "nonpayable", type: "function" },
+          { inputs: [{ internalType: "address", name: "spender", type: "address" }, { internalType: "uint256", name: "amount", type: "uint256" }], name: "approve", outputs: [{ internalType: "bool", name: "", type: "bool" }], stateMutability: "nonpayable", type: "function" }
+        ], s);
 
-      const token = new ethers.Contract(CONTRACTS.collateral, [
-        { inputs: [{ internalType: "address", name: "to", type: "address" }, { internalType: "uint256", name: "amount", type: "uint256" }], name: "mintTo", outputs: [], stateMutability: "nonpayable", type: "function" },
-        { inputs: [{ internalType: "address", name: "spender", type: "address" }, { internalType: "uint256", name: "amount", type: "uint256" }], name: "approve", outputs: [{ internalType: "bool", name: "", type: "bool" }], stateMutability: "nonpayable", type: "function" }
-      ], signer);
+        const amt = ethers.utils.parseUnits(amount, 18);
+        await (await token.mintTo(address, amt)).wait();
+        await (await token.approve(CONTRACTS.lendingPool, amt)).wait();
 
-      const amt = ethers.utils.parseUnits(amount, 18);
-      await (await token.mintTo(address, amt)).wait();
-      await (await token.approve(CONTRACTS.lendingPool, amt)).wait();
-
-      const iface = new ethers.utils.Interface(LendingPoolABI);
-      const data = iface.encodeFunctionData("addCollateral", [amt]);
-
-      await safeSendRelayedTx(CONTRACTS.lendingPool, data, 0);
-      pushToast("Collateral deposited", "success");
+        const iface = new ethers.utils.Interface(LendingPoolABI);
+        const data = iface.encodeFunctionData("addCollateral", [amt]);
+        await safeSendRelayedTx(CONTRACTS.lendingPool, data, 0);
+        pushToast("Collateral deposited", "success");
+        fetchHistoryAndLimit();
+      });
     } catch (err) {
       console.error("deposit err", err);
       pushToast("Deposit failed", "error");
     } finally {
       setLoading(false);
-      fetchHistoryAndLimit();
     }
   }
 
   async function borrow() {
-    if (!signer) return pushToast("Connect wallet", "error");
+    if (!address) return pushToast("Connect wallet", "error");
     try {
       setLoading(true);
       const amt = ethers.utils.parseUnits(amount, 18);
@@ -375,20 +479,20 @@ export default function App() {
       const data = iface.encodeFunctionData("borrow", [amt]);
       await safeSendRelayedTx(CONTRACTS.lendingPool, data, 0);
       pushToast("Borrow requested", "success");
+      fetchHistoryAndLimit();
     } catch (err) {
       console.error("borrow err", err);
       pushToast("Borrow failed", "error");
     } finally {
       setLoading(false);
-      fetchHistoryAndLimit();
     }
   }
 
   async function repay() {
-    if (!signer) return pushToast("Connect wallet", "error");
+    if (!address) return pushToast("Connect wallet", "error");
     try {
       setLoading(true);
-      if (!CONTRACTS.stable) throw new Error("Stable contract not set for network");
+      if (!CONTRACTS.stable) throw new Error("Stable contract not set for this network");
       const stable = new ethers.Contract(CONTRACTS.stable, [
         { inputs: [{ internalType: "address", name: "to", type: "address" }, { internalType: "uint256", name: "amount", type: "uint256" }], name: "mintTo", outputs: [], stateMutability: "nonpayable", type: "function" },
         { inputs: [{ internalType: "address", name: "spender", type: "address" }, { internalType: "uint256", name: "amount", type: "uint256" }], name: "approve", outputs: [{ internalType: "bool", name: "", type: "bool" }], stateMutability: "nonpayable", type: "function" }
@@ -402,16 +506,16 @@ export default function App() {
       const data = iface.encodeFunctionData("repay", [amt]);
       await safeSendRelayedTx(CONTRACTS.lendingPool, data, 0);
       pushToast("Repay relayed", "success");
+      fetchHistoryAndLimit();
     } catch (err) {
       console.error("repay err", err);
       pushToast("Repay failed", "error");
     } finally {
       setLoading(false);
-      fetchHistoryAndLimit();
     }
   }
 
-  // ScoreBars small component
+  /** UI small helpers */
   function ScoreBars({ items }) {
     const last = (items || []).slice(-8);
     const max = 1000;
@@ -427,9 +531,9 @@ export default function App() {
     );
   }
 
+  /** Render */
   return (
     <div className="app-bg premium-bg">
-      {/* Toast stack */}
       <div className="toast-wrapper" role="status" aria-live="polite">
         {toasts.map((t) => (
           <NeonToast key={t.id} type={t.type} onClose={() => setToasts((s) => s.filter((x) => x.id !== t.id))}>
@@ -449,7 +553,6 @@ export default function App() {
           </div>
 
           <div className="top-actions" style={{ gap: 12 }}>
-            {/* neon pill switch */}
             <NeonDropdown
               activeNetKey={activeNetKey}
               setActiveNetKey={(k) => {
@@ -460,7 +563,7 @@ export default function App() {
             />
 
             {!address ? (
-              <button className="btn neon" onClick={connect}>Connect Wallet</button>
+              <button className="btn neon btn-connect-wallet" onClick={connect}>Connect Wallet</button>
             ) : (
               <>
                 <div className="addr" title={address}>
@@ -480,13 +583,13 @@ export default function App() {
               {!address ? <div className="muted">Not connected</div> : (
                 <>
                   <div className="addr-large small-wrap">{address}</div>
-                  <div className="muted">Balance: {balance} ETH</div>
+                  <div className="muted">Balance: {balance} {activeNet.label === "Flare" ? "FLR/ETH" : "ETH"}</div>
                 </>
               )}
 
               <div style={{ marginTop: 12 }}>
-                <button className="btn outline" onClick={mintSBT} disabled={loading}>Mint SBT</button>
-                <button className="btn" onClick={triggerScore} disabled={loading} style={{ marginLeft: 8 }}>Trigger Score</button>
+                <button className="btn outline btn-mint-sbt" onClick={mintSBT} disabled={loading}>Mint SBT</button>
+                <button className="btn btn-trigger-score" onClick={triggerScore} disabled={loading} style={{ marginLeft: 8 }}>Trigger Score</button>
               </div>
             </div>
 
@@ -517,7 +620,6 @@ export default function App() {
 
                 <div className="form-row" style={{ alignItems: "center" }}>
                   <input className="input big" value={amount} onChange={(e) => setAmount(e.target.value)} />
-
                   <div className="form-actions">
                     <button className="btn" onClick={depositCollateral} disabled={loading}>Deposit</button>
                     <button className="btn neon" onClick={borrow} disabled={loading}>Borrow</button>
@@ -525,7 +627,7 @@ export default function App() {
                   </div>
                 </div>
 
-                <div className="muted" style={{ marginTop: 10 }}>Tip: switch network using the pill above.</div>
+                <div className="muted" style={{ marginTop: 10 }}>Tip: switch network using the dropdown above.</div>
               </div>
 
               <div className="hero-right">
@@ -563,7 +665,7 @@ export default function App() {
             <div className="card glass mt">
               <h3>Activity Steps</h3>
               <ol className="muted small">
-                <li>Switch network via pill (Local / Flare / Mainnet)</li>
+                <li>Switch network via dropdown (Local / Flare / Mainnet)</li>
                 <li>Connect Wallet</li>
                 <li>Mint SBT (identity)</li>
                 <li>Trigger score (AI mock)</li>
@@ -578,13 +680,11 @@ export default function App() {
           <div className="muted">Built with ♥ — DIL</div>
         </footer>
       </div>
+
       <GuideTour
         steps={TOUR_STEPS}
         open={tourOpen}
-        onClose={() => {
-          localStorage.setItem("tour_done", "1");
-          setTourOpen(false);
-        }}
+        onClose={() => { localStorage.setItem("tour_done", "1"); setTourOpen(false); }}
       />
     </div>
   );

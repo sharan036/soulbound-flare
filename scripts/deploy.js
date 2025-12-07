@@ -1,54 +1,39 @@
-const hre = require("hardhat");
-const fs = require("fs");
-const path = require("path");
+export const NETWORKS = {
+  local: {
+    label: "Local Testnet",
+    chainId: 31337,
+    rpcUrl: "http://localhost:8545",
+    relayer: "http://localhost:3001",
+    contracts: {
+      lendingPool:
+        import.meta.env.VITE_LENDING_POOL_LOCAL ||
+        import.meta.env.VITE_LENDING_POOL,
+      soulbound:
+        import.meta.env.VITE_SOULBOUND_LOCAL ||
+        import.meta.env.VITE_SOULBOUND,
+      collateral:
+        import.meta.env.VITE_COLLATERAL_LOCAL ||
+        import.meta.env.VITE_COLLATERAL,
+      stable:
+        import.meta.env.VITE_STABLE_LOCAL ||
+        import.meta.env.VITE_STABLE,
+      scoreOracle:
+        import.meta.env.VITE_SCORE_ORACLE_LOCAL ||
+        import.meta.env.VITE_SCORE_ORACLE
+    }
+  },
 
-async function main() {
-    const [deployer] = await hre.ethers.getSigners();
-    console.log("Deploying contracts with", deployer.address);
-
-    const MockERC20 = await hre.ethers.getContractFactory("MockERC20");
-    const stable = await MockERC20.deploy("MockUSD", "mUSD", hre.ethers.utils.parseUnits("1000000", 18));
-    await stable.deployed();
-
-    const collateral = await MockERC20.deploy("MockFAsset", "mFA", hre.ethers.utils.parseUnits("1000000", 18));
-    await collateral.deployed();
-
-    const MockFTSO = await hre.ethers.getContractFactory("MockFTSO");
-    const ftso = await MockFTSO.deploy();
-    await ftso.deployed();
-
-    const SoulBound = await hre.ethers.getContractFactory("SoulBound");
-    const sbt = await SoulBound.deploy();
-    await sbt.deployed();
-
-    const ScoreOracle = await hre.ethers.getContractFactory("ScoreOracle");
-    const oracle = await ScoreOracle.deploy();
-    await oracle.deployed();
-
-    const LendingPool = await hre.ethers.getContractFactory("LendingPool");
-    const pool = await LendingPool.deploy(stable.address, collateral.address, oracle.address, ftso.address);
-    await pool.deployed();
-
-    console.log("Mock stable:", stable.address);
-    console.log("Collateral token:", collateral.address);
-    console.log("MockFTSO:", ftso.address);
-    console.log("SoulBound:", sbt.address);
-    console.log("ScoreOracle:", oracle.address);
-    console.log("LendingPool:", pool.address);
-
-    // Write env files for frontend and backend
-    const frontendEnv = `VITE_LENDING_POOL=${pool.address}\nVITE_SOULBOUND=${sbt.address}\nVITE_SCORE_ORACLE=${oracle.address}\nVITE_COLLATERAL=${collateral.address}\nVITE_STABLE=${stable.address}\n`;
-    fs.writeFileSync(path.join(__dirname, "..", "frontend", ".env"), frontendEnv);
-
-    // Use the deployer as the relayer key for local demo (NEVER do this in production)
-    const privateKey = hre.network.config.accounts && hre.network.config.accounts[0] ? hre.network.config.accounts[0] : '0x'.padEnd(66,'0');
-    const backendEnv = `RPC_URL=http://localhost:8545\nSCORE_ORACLE_ADDRESS=${oracle.address}\nRELAYER_PRIVATE_KEY=${privateKey}\n`;
-    fs.writeFileSync(path.join(__dirname, "..", "backend", ".env"), backendEnv);
-
-    console.log('Wrote frontend/.env and backend/.env for local demo');
-}
-
-main().catch((error) => {
-    console.error(error);
-    process.exitCode = 1;
-});
+  flare: {
+    label: "Flare Mainnet",
+    chainId: 14,
+    rpcUrl: "https://flare-api.flare.network/ext/bc/C/rpc",
+    relayer: "https://api.modran.xyz/relay",
+    contracts: {
+      lendingPool: import.meta.env.VITE_LENDING_POOL_MAINNET,
+      soulbound: import.meta.env.VITE_SOULBOUND_MAINNET,
+      collateral: import.meta.env.VITE_COLLATERAL_MAINNET,
+      stable: import.meta.env.VITE_STABLE_MAINNET,
+      scoreOracle: import.meta.env.VITE_SCORE_ORACLE_MAINNET
+    }
+  }
+};
