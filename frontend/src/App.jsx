@@ -492,20 +492,47 @@ export default function App() {
     if (!address) return pushToast("Connect wallet", "error");
     try {
       setLoading(true);
-      if (!CONTRACTS.stable) throw new Error("Stable contract not set for this network");
-      const stable = new ethers.Contract(CONTRACTS.stable, [
-        { inputs: [{ internalType: "address", name: "to", type: "address" }, { internalType: "uint256", name: "amount", type: "uint256" }], name: "mintTo", outputs: [], stateMutability: "nonpayable", type: "function" },
-        { inputs: [{ internalType: "address", name: "spender", type: "address" }, { internalType: "uint256", name: "amount", type: "uint256" }], name: "approve", outputs: [{ internalType: "bool", name: "", type: "bool" }], stateMutability: "nonpayable", type: "function" }
-      ], signer);
+      if (!CONTRACTS.stable)
+        throw new Error("Stable contract not set for this network");
+
+      const stable = new ethers.Contract(
+        CONTRACTS.stable,
+        [
+          {
+            inputs: [
+              { internalType: "address", name: "to", type: "address" },
+              { internalType: "uint256", name: "amount", type: "uint256" }
+            ],
+            name: "mintTo",
+            outputs: [],
+            stateMutability: "nonpayable",
+            type: "function"
+          },
+          {
+            inputs: [
+              { internalType: "address", name: "spender", type: "address" },
+              { internalType: "uint256", name: "amount", type: "uint256" }
+            ],
+            name: "approve",
+            outputs: [{ internalType: "bool", name: "", type: "bool" }],
+            stateMutability: "nonpayable",
+            type: "function"
+          }
+        ],
+        signer
+      );
 
       const amt = ethers.utils.parseUnits(amount, 18);
+
       await (await stable.mintTo(address, amt)).wait();
       await (await stable.approve(CONTRACTS.lendingPool, amt)).wait();
 
       const iface = new ethers.utils.Interface(LendingPoolABI);
       const data = iface.encodeFunctionData("repay", [amt]);
+
       await safeSendRelayedTx(CONTRACTS.lendingPool, data, 0);
       pushToast("Repay relayed", "success");
+
       fetchHistoryAndLimit();
     } catch (err) {
       console.error("repay err", err);
