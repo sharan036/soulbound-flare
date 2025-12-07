@@ -139,7 +139,7 @@ Changing the network updates:
 
 ---
 
-## 👨 Development Notes
+## Development Notes
 
 - React App auto-refreshes score history every 6 seconds.
 - Relayer validates typed EIP‑712 signatures.
