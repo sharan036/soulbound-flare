@@ -147,7 +147,7 @@ Changing the network updates:
 - UI shows user‑friendly previews before they sign.
 ---
 ## Deploy link
-- **Frontend:** 
+- **Frontend:** https://soulbound-flare.vercel.app/
 - **Backend:**  
 ---
 ## Contract address
